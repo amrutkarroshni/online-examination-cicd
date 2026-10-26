@@ -19,53 +19,116 @@ pipeline {
     }
 
     stages {
+
         stage('Checkout') {
             steps {
                 checkout scm
-                sh 'git log -1 --pretty="Commit: %h by %an - %s"'
+
+                bat 'git log -1 --pretty="Commit: %h by %an - %s"'
             }
         }
+
         stage('Build') {
-            steps { sh 'mvn -B clean compile' }
-        }
-        stage('Test') {
-            steps { sh 'mvn -B test' }
-            post {
-                always { junit 'target/surefire-reports/*.xml' }
+            steps {
+                bat 'mvn -B clean compile'
             }
         }
+
+        stage('Test') {
+            steps {
+                bat 'mvn -B test'
+            }
+
+            post {
+                always {
+                    junit allowEmptyResults: true,
+                          testResults: 'target/surefire-reports/*.xml'
+                }
+            }
+        }
+
         stage('Package WAR') {
             steps {
-                sh 'mvn -B package -DskipTests'
-                archiveArtifacts artifacts: 'target/exam-system.war', fingerprint: true
+                bat 'mvn -B package -DskipTests'
+
+                archiveArtifacts(
+                    artifacts: 'target/exam-system.war',
+                    fingerprint: true
+                )
             }
         }
+
         stage('Deploy to Tomcat') {
             steps {
-                withCredentials([usernamePassword(credentialsId: 'tomcat-deployer',
-                    usernameVariable: 'TC_USER', passwordVariable: 'TC_PASS')]) {
-                    sh '''
-                        set -eu
-                        curl --fail --silent --show-error -u "$TC_USER:$TC_PASS"                           -T "$WAR_FILE"                           "$TOMCAT_URL/manager/text/deploy?path=$APP_PATH&update=true"                           -o deploy.log
-                        cat deploy.log
-                        grep -q '^OK' deploy.log
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'tomcat-deployer',
+                        usernameVariable: 'TC_USER',
+                        passwordVariable: 'TC_PASS'
+                    )
+                ]) {
+                    bat '''
+                        @echo off
+
+                        curl.exe --fail --silent --show-error ^
+                          -u "%TC_USER%:%TC_PASS%" ^
+                          -T "%WAR_FILE%" ^
+                          "%TOMCAT_URL%/manager/text/deploy?path=%APP_PATH%&update=true" ^
+                          -o deploy.log
+
+                        if errorlevel 1 exit /b 1
+
+                        type deploy.log
+
+                        findstr /b /c:"OK" deploy.log >nul
+
+                        if errorlevel 1 exit /b 1
                     '''
                 }
             }
         }
+
         stage('Verify Deployment') {
             steps {
                 retry(5) {
                     sleep time: 5, unit: 'SECONDS'
-                    sh 'curl --fail --silent --show-error "$TOMCAT_URL$APP_PATH/health" | grep -q OK'
+
+                    bat '''
+                        @echo off
+
+                        curl.exe --fail --silent --show-error ^
+                          "%TOMCAT_URL%%APP_PATH%/health" ^
+                          | findstr /c:"OK" >nul
+
+                        if errorlevel 1 exit /b 1
+                    '''
                 }
-                sh 'curl --fail --silent --show-error -o /dev/null -w "Exam page HTTP status: %{http_code}\\n" "$TOMCAT_URL$APP_PATH/exam"'
+
+                bat '''
+                    @echo off
+
+                    curl.exe --fail --silent --show-error ^
+                      -o NUL ^
+                      -w "Exam page HTTP status: %%{http_code}\\n" ^
+                      "%TOMCAT_URL%%APP_PATH%/exam"
+
+                    if errorlevel 1 exit /b 1
+                '''
             }
         }
     }
+
     post {
-        success { echo 'Pipeline successful. Open http://localhost:8080/exam/' }
-        failure { echo 'Pipeline failed. Review the failed stage and console output.' }
-        always { cleanWs() }
+        success {
+            echo 'Pipeline successful. Open http://localhost:8080/exam/'
+        }
+
+        failure {
+            echo 'Pipeline failed. Review the failed stage and console output.'
+        }
+
+        always {
+            cleanWs()
+        }
     }
 }
